@@ -1,6 +1,8 @@
 import express from "express";
 import authRouter from "./routes/auth.route.js";
 import { FRONTEND_DEV_URL, FRONTEND_PROD_URL, NODE_ENV } from "./config/index.js";
+import cors from "cors";
+import cookieParser from "cookie-parser";
 
 const app = express();
 app.use(
