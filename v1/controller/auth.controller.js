@@ -8,7 +8,7 @@ const Register = async (req, res) => {
   const { fullName, email, password, phone, address } = req.body;
 
   try {
-    // Kiểm tra xem user đã tồn tại trong database chưa (dựa vào email)
+    // Kiểm tra xem user đã tồn tại trong database chưa
     const [rows] = await pool.query("SELECT * FROM users WHERE email = ?", [email]);
     const existingUser = rows[0];
 
@@ -85,14 +85,105 @@ const Register = async (req, res) => {
     });
   }
 };
+
+const verifyEmail = async (req, res) => {
+  const { userId, uniqueStr } = req.params;
+
+  try {
+    // Kiểm tra xem bản ghi xác thực có tồn tại không
+    const [userVerifyRows] = await pool.query("SELECT * FROM userverification WHERE userId = ?", [
+      userId,
+    ]);
+
+    if (userVerifyRows.length > 0) {
+      const { expireDate, uniqueStr: hashedUniqueStr } = userVerifyRows[0];
+
+      // Kiểm tra hạn sử dụng của link
+      if (new Date(expireDate) < new Date()) {
+        try {
+          // Xóa bản ghi xác thực đã hết hạn
+          await pool.query("DELETE FROM userverification WHERE userId = ?", [userId]);
+
+          // Xóa user chưa được xác thực
+          await pool.query("DELETE FROM users WHERE id = ?", [userId]);
+
+          return res.json({
+            error: "true",
+            message: "Liên kết đã hết hạn. Vui lòng đăng ký lại.",
+          });
+        } catch (error) {
+          console.log(error);
+          return res.json({
+            error: "true",
+            message: "Đã xảy ra lỗi",
+          });
+        }
+      } else {
+        try {
+          // 3. So sánh chuỗi uniqueStr truyền lên với chuỗi đã hash trong database
+          const isUniqueStrValid = await bcrypt.compare(uniqueStr, hashedUniqueStr);
+
+          if (isUniqueStrValid) {
+            try {
+              // Cập nhật trạng thái verified của user thành true
+              const [result] = await pool.query("UPDATE users SET verified = true WHERE id = ?", [
+                userId,
+              ]);
+
+              if (result.affectedRows > 0) {
+                // Xóa bản ghi xác thực sau khi hoàn tất
+                await pool.query("DELETE FROM userverification WHERE userId = ?", [userId]);
+              }
+
+              return res.json({
+                error: "false",
+                message: "Xác thực thành công. Vui lòng đăng nhập.",
+              });
+            } catch (error) {
+              console.log(error);
+              return res.json({
+                error: "true",
+                message: "Đã xảy ra lỗi khi cập nhật trạng thái xác thực.",
+              });
+            }
+          } else {
+            return res.json({
+              error: "true",
+              message: "Thông tin xác thực không hợp lệ.",
+            });
+          }
+        } catch (error) {
+          console.log(error);
+          return res.json({
+            error: "true",
+            message: "Đã xảy ra lỗi khi so sánh mã xác thực.",
+          });
+        }
+      }
+    } else {
+      return res.json({
+        error: "true",
+        message:
+          "Tài khoản không tồn tại hoặc đã được xác thực trước đó. Vui lòng đăng ký hoặc đăng nhập.",
+      });
+    }
+  } catch (error) {
+    console.log(error);
+    return res.json({
+      error: "true",
+      message: "Đã xảy ra lỗi khi kiểm tra bản ghi xác thực người dùng.",
+    });
+  }
+};
+
 const Login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({
-        success: false,
-        error: "Vui lòng nhập đầy đủ email và mật khẩu!",
+        status: "false",
+        message: "Vui lòng nhập đầy đủ email và mật khẩu!",
       });
     }
 
@@ -100,21 +191,28 @@ const Login = async (req, res) => {
 
     if (rows.length === 0) {
       return res.status(401).json({
-        success: false,
-        error: "Email hoặc mật khẩu không chính xác!",
+        status: "false",
+        message: "Email hoặc mật khẩu không chính xác!",
       });
     }
 
     const user = rows[0];
 
-    const isPasswordValid = password === user.password;
-
+    const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({
-        success: false,
-        error: "Email hoặc mật khẩu không chính xác!",
+        status: "false",
+        message: "Email hoặc mật khẩu không chính xác!",
       });
     }
+
+    if (user.verified === 0 || user.verified === false) {
+      return res.json({
+        status: "false",
+        message: "Email chưa được xác thực!",
+      });
+    }
+
     const payload = {
       id: user.id,
       role: user.role,
@@ -191,4 +289,4 @@ const Logout = async (req, res) => {
   }
 };
 
-export { Login, Logout, Register };
+export { Login, Logout, Register, verifyEmail };
